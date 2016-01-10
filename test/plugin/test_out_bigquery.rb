@@ -1,7 +1,10 @@
 require 'helper'
-require 'google/api_client'
+require 'google/apis/bigquery_v2'
+require 'google/api_client/auth/key_utils'
 require 'googleauth'
-require 'fluent/plugin/buf_memory'
+require 'active_support/core_ext/hash'
+require 'active_support/core_ext/object/json'
+
 
 class BigQueryOutputTest < Test::Unit::TestCase
   def setup
@@ -32,7 +35,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
 
   def stub_client(driver)
     stub(client = Object.new) do |expect|
-      expect.discovered_api("bigquery", "v2") { stub! }
       yield expect if defined?(yield)
     end
     stub(driver.instance).client { client }
@@ -65,7 +67,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
     key = stub!
     mock(Google::APIClient::KeyUtils).load_from_pkcs12('/path/to/key', 'notasecret') { key }
     authorization = Object.new
-    mock(authorization).fetch_access_token!
     stub(Signet::OAuth2::Client).new
     mock(Signet::OAuth2::Client).new(
       token_credential_uri: "https://accounts.google.com/o/oauth2/token",
@@ -74,7 +75,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
       issuer: 'foo@bar.example',
       signing_key: key) { authorization }
 
-    mock.proxy(Google::APIClient).new.with_any_args {
+    mock.proxy(Google::Apis::BigqueryV2::BigqueryService).new.with_any_args {
       mock!.__send__(:authorization=, authorization) {}
     }
 
@@ -84,10 +85,9 @@ class BigQueryOutputTest < Test::Unit::TestCase
 
   def test_configure_auth_compute_engine
     authorization = Object.new
-    mock(authorization).fetch_access_token!
     mock(Google::Auth::GCECredentials).new { authorization }
 
-    mock.proxy(Google::APIClient).new.with_any_args {
+    mock.proxy(Google::Apis::BigqueryV2::BigqueryService).new.with_any_args {
       mock!.__send__(:authorization=, authorization) {}
     }
 
@@ -104,10 +104,9 @@ class BigQueryOutputTest < Test::Unit::TestCase
   def test_configure_auth_json_key_as_file
     json_key_path = 'test/plugin/testdata/json_key.json'
     authorization = Object.new
-    mock(authorization).fetch_access_token!
-    mock(Google::Auth::ServiceAccountCredentials).new(json_key_io: File.open(json_key_path), scope: API_SCOPE) { authorization }
+    mock(Google::Auth::ServiceAccountCredentials).make_creds(json_key_io: File.open(json_key_path), scope: API_SCOPE) { authorization }
 
-    mock.proxy(Google::APIClient).new.with_any_args {
+    mock.proxy(Google::Apis::BigqueryV2::BigqueryService).new.with_any_args {
       mock!.__send__(:authorization=, authorization) {}
     }
 
@@ -127,10 +126,9 @@ class BigQueryOutputTest < Test::Unit::TestCase
     json_key_io = StringIO.new(json_key)
     mock(StringIO).new(json_key) { json_key_io }
     authorization = Object.new
-    mock(authorization).fetch_access_token!
-    mock(Google::Auth::ServiceAccountCredentials).new(json_key_io: json_key_io, scope: API_SCOPE) { authorization }
+    mock(Google::Auth::ServiceAccountCredentials).make_creds(json_key_io: json_key_io, scope: API_SCOPE) { authorization }
 
-    mock.proxy(Google::APIClient).new.with_any_args {
+    mock.proxy(Google::Apis::BigqueryV2::BigqueryService).new.with_any_args {
       mock!.__send__(:authorization=, authorization) {}
     }
 
@@ -147,10 +145,9 @@ class BigQueryOutputTest < Test::Unit::TestCase
 
   def test_configure_auth_application_default
     authorization = Object.new
-    mock(authorization).fetch_access_token!
     mock(Google::Auth).get_application_default([API_SCOPE]) { authorization }
 
-    mock.proxy(Google::APIClient).new.with_any_args {
+    mock.proxy(Google::Apis::BigqueryV2::BigqueryService).new.with_any_args {
       mock!.__send__(:authorization=, authorization) {}
     }
 
@@ -286,9 +283,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
     }
 
     driver = create_driver(CONFIG)
-    mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { stub! }
-    end
     driver.instance.start
     buf = driver.instance.format_stream("my.tag", [input])
     driver.instance.shutdown
@@ -456,9 +450,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
       schema_path #{File.join(File.dirname(__FILE__), "testdata", "apache.schema")}
       field_integer time
     CONFIG
-    mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { stub! }
-    end
     driver.instance.start
     buf = driver.instance.format_stream("my.tag", [input])
     driver.instance.shutdown
@@ -499,9 +490,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
       schema_path #{File.join(File.dirname(__FILE__), "testdata", "sudo.schema")}
       field_integer time
     CONFIG
-    mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { stub! }
-    end
     driver.instance.start
     buf = driver.instance.format_stream("my.tag", [input])
     driver.instance.shutdown
@@ -543,18 +531,13 @@ class BigQueryOutputTest < Test::Unit::TestCase
       field_integer time
     CONFIG
     mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { mock!.tables.mock!.get { Object.new } }
-      expect.execute(
-        :api_method => anything,
-        :parameters => {
-          'projectId' => 'yourproject_id',
-          'datasetId' => 'yourdataset_id',
-          'tableId' => 'foo'
-        }
-      ) {
+      expect.get_table('yourproject_id', 'yourdataset_id', 'foo') {
         s = stub!
-        s.success? { true }
-        s.body { JSON.generate(sudo_schema_response) }
+        schema_stub = stub!
+        fields_stub = stub!
+        s.schema { schema_stub }
+        schema_stub.fields { fields_stub }
+        fields_stub.as_json { sudo_schema_response.deep_stringify_keys["schema"]["fields"] }
         s
       }
     end
@@ -620,18 +603,13 @@ class BigQueryOutputTest < Test::Unit::TestCase
       field_integer time
     CONFIG
     mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { mock!.tables.mock!.get { Object.new } }
-      expect.execute(
-        :api_method => anything,
-        :parameters => {
-          'projectId' => 'yourproject_id',
-          'datasetId' => 'yourdataset_id',
-          'tableId' => now.strftime('foo_%Y_%m_%d')
-        }
-      ) {
+      expect.get_table('yourproject_id', 'yourdataset_id', now.strftime('foo_%Y_%m_%d')) {
         s = stub!
-        s.success? { true }
-        s.body { JSON.generate(sudo_schema_response) }
+        schema_stub = stub!
+        fields_stub = stub!
+        s.schema { schema_stub }
+        schema_stub.fields { fields_stub }
+        fields_stub.as_json { sudo_schema_response.deep_stringify_keys["schema"]["fields"] }
         s
       }
     end
@@ -672,7 +650,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
       }
     ]
     expected = {
-      "insertId" => "9ABFF756-0267-4247-847F-0895B65F0938",
+      "insert_id" => "9ABFF756-0267-4247-847F-0895B65F0938",
       "json" => {
         "uuid" => "9ABFF756-0267-4247-847F-0895B65F0938",
       }
@@ -688,9 +666,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
       insert_id_field uuid
       field_string uuid
     CONFIG
-    mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { stub! }
-    end
     driver.instance.start
     buf = driver.instance.format_stream("my.tag", [input])
     driver.instance.shutdown
@@ -709,7 +684,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
       }
     ]
     expected = {
-      "insertId" => "809F6BA7-1C16-44CD-9816-4B20E2C7AA2A",
+      "insert_id" => "809F6BA7-1C16-44CD-9816-4B20E2C7AA2A",
       "json" => {
         "data" => {
           "uuid" => "809F6BA7-1C16-44CD-9816-4B20E2C7AA2A",
@@ -727,9 +702,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
       insert_id_field data.uuid
       field_string data.uuid
     CONFIG
-    mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { stub! }
-    end
     driver.instance.start
     buf = driver.instance.format_stream("my.tag", [input])
     driver.instance.shutdown
@@ -762,9 +734,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
       schema_path #{File.join(File.dirname(__FILE__), "testdata", "sudo.schema")}
       field_integer time
     CONFIG
-    mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { stub! }
-    end
     driver.instance.start
     assert_raises(RuntimeError.new("Required field user cannot be null")) do
       driver.instance.format_stream("my.tag", [input])
@@ -810,9 +779,6 @@ class BigQueryOutputTest < Test::Unit::TestCase
       field_string vhost, referer
       field_boolean bot_access, login_session
     CONFIG
-    mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { stub! }
-    end
     driver.instance.start
     buf = driver.instance.format_stream("my.tag", [input])
     driver.instance.shutdown
@@ -821,25 +787,18 @@ class BigQueryOutputTest < Test::Unit::TestCase
   end
 
   def test_write
-    entry = {"json" => {"a" => "b"}}, {"json" => {"b" => "c"}}
+    entry = {json: {a: "b"}}, {json: {b: "c"}}
     driver = create_driver(CONFIG)
     mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") { mock!.tabledata.mock!.insert_all { Object.new } }
-      expect.execute(
-        :api_method => anything,
-        :parameters => {
-          'projectId' => 'yourproject_id',
-          'datasetId' => 'yourdataset_id',
-          'tableId' => 'foo',
-        },
-        :body_object => {
-          'rows' => [entry]
-        }
-      ) { stub!.success? { true } }
+      expect.insert_all_table_data('yourproject_id', 'yourdataset_id', 'foo', {
+        rows: entry
+      }, {}) { stub! }
     end
 
     chunk = Fluent::MemoryBufferChunk.new("my.tag")
-    chunk << entry.to_msgpack
+    entry.each do |e|
+      chunk << e.to_msgpack
+    end
 
     driver.instance.start
     driver.instance.write(chunk)
@@ -880,7 +839,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
           "bytes" => 72,
         },
       }
-    }
+    }.deep_symbolize_keys
 
     driver = create_driver(<<-CONFIG)
       table foo
@@ -896,55 +855,27 @@ class BigQueryOutputTest < Test::Unit::TestCase
       schema_path #{File.join(File.dirname(__FILE__), "testdata", "apache.schema")}
     CONFIG
     mock_client(driver) do |expect|
-      expect.discovered_api("bigquery", "v2") {
-        mock! {
-          tables.mock!.insert { Object.new }
-          tabledata.mock!.insert_all { Object.new }
-        }
+      expect.insert_all_table_data('yourproject_id', 'yourdataset_id', 'foo', {
+        rows: [message]
+      }, {}) {
+        raise Google::Apis::ServerError.new("Not found: Table yourproject_id:yourdataset_id.foo", status_code: 404, body: "Not found: Table yourproject_id:yourdataset_id.foo")
       }
-      expect.execute(
-        :api_method => anything,
-        :parameters => {
-          'projectId' => 'yourproject_id',
-          'datasetId' => 'yourdataset_id',
-          'tableId' => 'foo'
+      expect.insert_table('yourproject_id', 'yourdataset_id', {
+        table_reference: {
+          table_id: 'foo',
         },
-        :body_object => {
-          "rows" => [ message ]
+        schema: {
+          fields: JSON.parse(File.read(File.join(File.dirname(__FILE__), "testdata", "apache.schema"))).map(&:deep_symbolize_keys),
         }
-      ) {
-        s = stub!
-        s.success? { false }
-        s.body { JSON.generate({
-          'error' => { "code" => 404, "message" => "Not found: Table yourproject_id:yourdataset_id.foo" }
-        }) }
-        s.status { 404 }
-        s
-      }
-      expect.execute(
-        :api_method => anything,
-        :parameters => {
-          'projectId' => 'yourproject_id',
-          'datasetId' => 'yourdataset_id',
-        },
-        :body_object => {
-          'tableReference' => {
-            'tableId' => 'foo',
-          },
-          'schema' => {
-            'fields' => JSON.parse(File.read(File.join(File.dirname(__FILE__), "testdata", "apache.schema")))
-          }
-        }
-      ) {
-        s = stub!
-        s.success? { true }
-        s
+      }, {}) {
+        stub!
       }
     end
     chunk = Fluent::MemoryBufferChunk.new("my.tag")
     chunk << message.to_msgpack
 
     driver.instance.start
+
     assert_raise(RuntimeError) {
       driver.instance.write(chunk)
     }
