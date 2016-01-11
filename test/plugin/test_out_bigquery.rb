@@ -822,7 +822,11 @@ class BigQueryOutputTest < Test::Unit::TestCase
     mock_client(driver) do |expect|
       expect.insert_all_table_data('yourproject_id', 'yourdataset_id', 'foo', {
         rows: entry
-      }, {}) { stub! }
+      }, {}) {
+        s = stub!
+        s.insert_errors { nil }
+        s
+      }
     end
 
     chunk = Fluent::MemoryBufferChunk.new("my.tag")
@@ -882,6 +886,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
         s.status { status_stub }
         status_stub.state { "DONE" }
         status_stub.error_result { nil }
+        status_stub.errors { nil }
         s
       }
     end
