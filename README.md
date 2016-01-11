@@ -1,16 +1,32 @@
-# fluent-plugin-bigquery
+# fluent-plugin-bigquery-custom
+[![Build Status](https://travis-ci.org/joker1007/fluent-plugin-bigquery.svg?branch=master)](https://travis-ci.org/joker1007/fluent-plugin-bigquery)
+
+forked from [kaizenplatform/fluent-plugin-bigquery](https://github.com/kaizenplatform/fluent-plugin-bigquery "kaizenplatform/fluent-plugin-bigquery")
+
+-----------
 
 [Fluentd](http://fluentd.org) output plugin to load/insert data into Google BigQuery.
 
 * insert data over streaming inserts
   * for continuous real-time insertions
   * https://developers.google.com/bigquery/streaming-data-into-bigquery#usecases
-* (NOT IMPLEMENTED) load data
+* load data
   * for data loading as batch jobs, for big amount of data
   * https://developers.google.com/bigquery/loading-data-into-bigquery
   
 Current version of this plugin supports Google API with Service Account Authentication, but does not support
 OAuth flow for installed applications.
+
+## Difference with original
+- Implement load method
+- Use google-api-client v0.9.pre
+- TimeSlicedOutput based
+- Use `%{time_slice}` placeholder in `table` parameter
+- Add config parameters
+  - `skip_invalid_rows`
+  - `max_bad_records`
+  - `ignore_unknown_values`
+- Improve error handling
 
 ## Configuration
 
@@ -105,6 +121,35 @@ Important options for high rate events are:
 
 See [Quota policy](https://cloud.google.com/bigquery/streaming-data-into-bigquery#quota)
 section in the Google BigQuery document.
+
+### Load
+```apache
+<match bigquery>
+  type bigquery
+
+  method load
+  buffer_type file
+  buffer_path bigquery.*.buffer
+  flush_interval 1800
+  flush_at_shutdown true
+  try_flush_interval 1
+  utc
+
+  auth_method json_key
+  json_key json_key_path.json
+
+  time_format %s
+  time_field  time
+
+  project yourproject_id
+  dataset yourdataset_id
+  auto_create_table true
+  table yourtable%{time_slice}
+  schema_path bq_schema.json
+</match>
+```
+
+I recommend to use file buffer and long flush interval.
 
 ### Authentication
 
@@ -364,8 +409,7 @@ You can set `insert_id_field` option to specify the field to use as `insertId` p
 
 ## TODO
 
-* support Load API
-  * with automatically configured flush/buffer options
+* Automatically configured flush/buffer options
 * support optional data fields
 * support NULLABLE/REQUIRED/REPEATED field options in field list style of configuration
 * OAuth installed application credentials support
@@ -376,4 +420,5 @@ You can set `insert_id_field` option to specify the field to use as `insertId` p
 ## Authors
 
 * @tagomoris: First author, original version
-* KAIZEN platform Inc.: Maintener, Since 2014.08.19
+* KAIZEN platform Inc.: Maintener, Since 2014.08.19 (original version)
+* @joker1007 (forked version)
