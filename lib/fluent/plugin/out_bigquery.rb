@@ -13,7 +13,7 @@ module Fluent
   # class BigQueryAPIError < StandardError
   # end
 
-  class BigQueryOutput < BufferedOutput
+  class BigQueryOutput < TimeSlicedOutput
     Fluent::Plugin.register_output('bigquery', self)
 
     # https://developers.google.com/bigquery/browser-tool-quickstart
@@ -276,8 +276,17 @@ module Fluent
       @cached_client = client
     end
 
-    def generate_table_id(table_id_format, current_time)
-      current_time.strftime(table_id_format)
+    def generate_table_id(table_id_format, current_time, chunk = nil)
+      table_id = current_time.strftime(table_id_format)
+      if chunk
+        table_id.gsub(%r(%{time_slice})) { |expr|
+          chunk.key
+        }
+      else
+        table_id.gsub(%r(%{time_slice})) { |expr|
+          current_time.strftime(@time_slice_format)
+        }
+      end
     end
 
     def create_table(table_id)
@@ -318,8 +327,7 @@ module Fluent
       end
     end
 
-    def insert(table_id_format, rows)
-      table_id = generate_table_id(table_id_format, Time.at(Fluent::Engine.now))
+    def insert(table_id, rows)
       res = client().execute(
         api_method: @bq.tabledata.insert_all,
         parameters: {
@@ -367,20 +375,17 @@ module Fluent
       new_record
     end
 
-    def format_stream(tag, es)
-      super
+    def format(tag, time, record)
       buf = ''
-      es.each do |time, record|
-        if @replace_record_key
-          record = replace_record_key(record)
-        end
 
-        row = @fields.format(@add_time_field.call(record, time))
-        unless row.empty?
-          row = {"json" => row}
-          row['insertId'] = @get_insert_id.call(record) if @get_insert_id
-          buf << row.to_msgpack
-        end
+      if @replace_record_key
+        record = replace_record_key(record)
+      end
+      row = @fields.format(@add_time_field.call(record, time))
+      unless row.empty?
+        row = {"json" => row}
+        row['insertId'] = @get_insert_id.call(record) if @get_insert_id
+        buf << row.to_msgpack
       end
       buf
     end
@@ -399,7 +404,8 @@ module Fluent
         @tables_queue.push t
         t
       end
-      insert(insert_table, rows)
+      table_id = generate_table_id(insert_table, Time.at(Fluent::Engine.now), chunk)
+      insert(table_id, rows)
     end
 
     def fetch_schema
