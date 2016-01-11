@@ -2,6 +2,7 @@ require 'helper'
 require 'google/apis/bigquery_v2'
 require 'google/api_client/auth/key_utils'
 require 'googleauth'
+require 'active_support/json'
 require 'active_support/core_ext/hash'
 require 'active_support/core_ext/object/json'
 
@@ -709,6 +710,35 @@ class BigQueryOutputTest < Test::Unit::TestCase
     assert_equal expected, MessagePack.unpack(buf)
   end
 
+  def test_format_for_load
+    now = Time.now
+    input = [
+      now,
+      {
+        "uuid" => "9ABFF756-0267-4247-847F-0895B65F0938",
+      }
+    ]
+    expected = MultiJson.dump({
+      "uuid" => "9ABFF756-0267-4247-847F-0895B65F0938",
+    }) + "\n"
+
+    driver = create_driver(<<-CONFIG)
+      method load
+      table foo
+      email foo@bar.example
+      private_key_path /path/to/key
+      project yourproject_id
+      dataset yourdataset_id
+
+      field_string uuid
+    CONFIG
+    driver.instance.start
+    buf = driver.instance.format_stream("my.tag", [input])
+    driver.instance.shutdown
+
+    assert_equal expected, buf
+  end
+
   def test_empty_value_in_required
     now = Time.now
     input = [
@@ -798,6 +828,66 @@ class BigQueryOutputTest < Test::Unit::TestCase
     chunk = Fluent::MemoryBufferChunk.new("my.tag")
     entry.each do |e|
       chunk << e.to_msgpack
+    end
+
+    driver.instance.start
+    driver.instance.write(chunk)
+    driver.instance.shutdown
+  end
+
+  def test_write_for_load
+    schema_path = File.join(File.dirname(__FILE__), "testdata", "sudo.schema")
+    entry = {a: "b"}, {b: "c"}
+    driver = create_driver(<<-CONFIG)
+      method load
+      table foo
+      email foo@bar.example
+      private_key_path /path/to/key
+      project yourproject_id
+      dataset yourdataset_id
+
+      time_format %s
+      time_field  time
+
+      schema_path #{schema_path}
+      field_integer time
+    CONFIG
+    schema_fields = MultiJson.load(File.read(schema_path)).map(&:deep_symbolize_keys).tap do |h|
+      h[0][:type] = "INTEGER"
+      h[0][:mode] = "NULLABLE"
+    end
+
+    chunk = Fluent::MemoryBufferChunk.new("my.tag")
+    io = StringIO.new("hello")
+    mock(driver.instance).create_upload_source(chunk).yields(io)
+    mock_client(driver) do |expect|
+      expect.insert_job('yourproject_id', {
+        configuration: {
+          load: {
+            destination_table: {
+              project_id: 'yourproject_id',
+              dataset_id: 'yourdataset_id',
+              table_id: 'foo',
+            },
+            schema: {
+              fields: schema_fields,
+            },
+            write_disposition: "WRITE_APPEND",
+            source_format: "NEWLINE_DELIMITED_JSON"
+          }
+        }
+      }, {upload_source: io, content_type: "application/octet-stream"}) {
+        s = stub!
+        status_stub = stub!
+        s.status { status_stub }
+        status_stub.state { "DONE" }
+        status_stub.error_result { nil }
+        s
+      }
+    end
+
+    entry.each do |e|
+      chunk << MultiJson.dump(e) + "\n"
     end
 
     driver.instance.start
