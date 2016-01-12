@@ -881,13 +881,24 @@ class BigQueryOutputTest < Test::Unit::TestCase
           }
         }
       }, {upload_source: io, content_type: "application/octet-stream"}) {
-        s = stub!
-        status_stub = stub!
-        s.status { status_stub }
-        status_stub.state { "DONE" }
-        status_stub.error_result { nil }
-        status_stub.errors { nil }
-        s
+        Google::Apis::BigqueryV2::Job.new({
+          job_reference: Google::Apis::BigqueryV2::JobReference.new({job_id: "job_id"})
+        })
+      }
+
+      expect.get_job('yourproject_id', "job_id") {
+        Google::Apis::BigqueryV2::Job.new({
+          configuration: Google::Apis::BigqueryV2::JobConfiguration.new({
+            load: Google::Apis::BigqueryV2::JobConfigurationLoad.new({
+              destination_table: Google::Apis::BigqueryV2::TableReference.new({
+                project_id: 'yourproject_id',
+                dataset_id: 'yourdataset_id',
+                table_id: 'foo',
+              }),
+            })
+          }),
+          status: Google::Apis::BigqueryV2::JobStatus.new({state: "DONE"}),
+        })
       }
     end
 
