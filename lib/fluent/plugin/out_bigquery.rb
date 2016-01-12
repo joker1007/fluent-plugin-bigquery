@@ -102,7 +102,10 @@ module Fluent
     config_param :utc, :bool, default: nil
     config_param :time_field, :string, default: nil
 
+    # insert_id_field (only insert)
     config_param :insert_id_field, :string, default: nil
+    # prevent_duplicate_load (only load)
+    config_param :prevent_duplicate_load, :bool, default: false
 
     config_param :method, :string, default: 'insert' # or 'load'
 
@@ -164,6 +167,7 @@ module Fluent
       if @method == "insert"
         extend(InsertImplementation)
       elsif @method == "load"
+        require 'digest/sha1'
         extend(LoadImplementation)
       else
         raise Fluend::ConfigError "'method' must be 'insert' or 'load'"
@@ -422,10 +426,13 @@ module Fluent
           raise "table created. send rows next time."
         end
 
+        reason = e.respond_to?(:reason) ? e.reason : nil
         log.error "tabledata.insertAll API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: e.message, reason: e.reason
-        if e.reason == "backendError"
-          raise "failed to insert into bigquery, retry" # TODO: error class
-        elsif @secondary
+
+        raise "failed to insert into bigquery, retry" if reason == "backendError" # backendError is retryable. TODO: error class
+
+        # other error handling
+        if @secondary
           flush_secondary(@secondary)
         end
       end
@@ -447,8 +454,13 @@ module Fluent
 
       def _write(chunk, table_id)
         res = nil
+        job_id = nil
+
         create_upload_source(chunk) do |upload_source|
-          res = client.insert_job(@project, {
+          if @prevent_duplicate_load
+            job_id = create_job_id(upload_source.path, @dataset, @table, @fields.to_a, @max_bad_records, @ignore_unknown_values)
+          end
+          configuration = {
             configuration: {
               load: {
                 destination_table: {
@@ -465,28 +477,37 @@ module Fluent
                 max_bad_records: @max_bad_records,
               }
             }
-          }, {upload_source: upload_source, content_type: "application/octet-stream"})
+          }
+          configuration.merge!({job_reference: {project_id: @project, job_id: job_id}}) if job_id
+          res = client.insert_job(@project, configuration, {upload_source: upload_source, content_type: "application/octet-stream"})
         end
-        wait_load(res, table_id)
+
+        wait_load(res.job_reference.job_id)
       rescue Google::Apis::ServerError, Google::Apis::ClientError, Google::Apis::AuthorizationError => e
         # api_error? -> client cache clear
         @cached_client = nil
 
-        log.error "job.insert API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: e.message, reason: e.reason
-        if e.reason == "backendError"
-          raise "failed to insert into bigquery, retry" # TODO: error class
-        elsif @secondary
+        reason = e.respond_to?(:reason) ? e.reason : nil
+        log.error "job.insert API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: e.message, reason: reason
+
+        raise "failed to insert into bigquery, retry" if reason == "backendError" # backendError is retryable. TODO: error class
+        return wait_load(job_id) if e.status_code == 409 && e.message =~ /Job/ # duplicate load job
+
+        # other error handling
+        if @secondary
           flush_secondary(@secondary)
         end
       end
 
       private
 
-      def wait_load(res, table_id)
+      def wait_load(job_id)
         wait_interval = 10
-        _response = res
+        _response = client.get_job(@project, job_id)
+        table_id = _response.configuration.load.destination_table.table_id
+
         until _response.status.state == "DONE"
-          log.debug "wait for load job finish", state: _response.status.state
+          log.debug "wait for load job finish", state: _response.status.state, job_id: _response.job_reference.job_id
           sleep wait_interval
           _response = client.get_job(@project, _response.job_reference.job_id)
         end
@@ -526,6 +547,10 @@ module Fluent
             yield file
           end
         end
+      end
+
+      def create_job_id(upload_source_path, dataset, table, schema, max_bad_records, ignore_unknown_values)
+        "fluentd_job_" + Digest::SHA1.hexdigest("#{upload_source_path}#{dataset}#{table}#{schema.to_s}#{max_bad_records}#{ignore_unknown_values}")
       end
     end
 
