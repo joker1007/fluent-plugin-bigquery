@@ -26,6 +26,7 @@ OAuth flow for installed applications.
   - `skip_invalid_rows`
   - `max_bad_records`
   - `ignore_unknown_values`
+  - `prevent_duplicate_load`
 - Improve error handling
 
 ## Configuration
@@ -406,6 +407,34 @@ You can set `insert_id_field` option to specify the field to use as `insertId` p
   field_string uuid
 </match>
 ```
+
+### Prevent duplicate load
+
+If you want to detect duplicate load job, you set `prevent_duplicate_load` to `true`
+`prevent_duplicate_load` makes load job\_id consistent.
+For example, even if fluentd process crashed during waiting for job, fluentd can resume waiting for same job.
+
+```apache
+<match dummy>
+  type bigquery
+  
+  ...
+  
+  prevent_duplicate_load true
+</match>
+```
+
+job\_id is calculated by SHA1. The factors are ...
+
+- upload source path (file buffer path)
+- dataset
+- table
+- schema
+- `max_bad_records`
+- `ignore_unknown_values`
+
+NOTE: Duplicate job error does not invoke `flush_secondary`.
+NOTE: This option affects only when use file buffer.
 
 ## TODO
 
