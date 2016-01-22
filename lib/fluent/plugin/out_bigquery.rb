@@ -149,6 +149,7 @@ module Fluent
       require 'json'
       require 'google/apis/bigquery_v2'
       require 'googleauth'
+      require 'active_support/json'
       require 'active_support/core_ext/hash'
       require 'active_support/core_ext/object/json'
 
