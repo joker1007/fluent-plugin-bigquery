@@ -489,7 +489,7 @@ module Fluent
           if @prevent_duplicate_load
             job_id = create_job_id(upload_source.path, @dataset, @table, @fields.to_a, @max_bad_records, @ignore_unknown_values)
           end
-          configuration = load_configuration(table_id, template_suffix)
+          configuration = load_configuration(table_id, template_suffix, upload_source)
           res = client.insert_job(@project, configuration, {upload_source: upload_source, content_type: "application/octet-stream"})
         end
 
@@ -512,7 +512,7 @@ module Fluent
 
       private
 
-      def load_configuration(table_id, template_suffix)
+      def load_configuration(table_id, template_suffix, upload_source)
         job_id = nil
         if @prevent_duplicate_load
           job_id = create_job_id(upload_source.path, @dataset, "#{table_id}#{template_suffix}", @fields.to_a, @max_bad_records, @ignore_unknown_values)
