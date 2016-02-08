@@ -428,7 +428,7 @@ module Fluent
         end
 
         reason = e.respond_to?(:reason) ? e.reason : nil
-        log.error "tabledata.insertAll API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: e.message, reason: e.reason
+        log.error "tabledata.insertAll API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: e.message, reason: reason
 
         raise "failed to insert into bigquery, retry" if reason == "backendError" # backendError is retryable. TODO: error class
 
