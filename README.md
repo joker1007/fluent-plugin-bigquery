@@ -27,7 +27,15 @@ OAuth flow for installed applications.
   - `max_bad_records`
   - `ignore_unknown_values`
   - `prevent_duplicate_load`
+  - `template_suffix`
+  - `schema_cache_expire`
 - Improve error handling
+- Add templateSuffix feature
+  - `template_suffix` can use same placeholder for `table`
+  - If use load method, emulate templateSuffix process. But, slightly different with Streaming Insert.
+    1. Fetch Schema from base table per `schema_cache_expire` time
+    1. If table exists, Insert job with no schema data.
+    1. Unless table exists, Insert job with fetched schema data.
 
 ## Configuration
 
