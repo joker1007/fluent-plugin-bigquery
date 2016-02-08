@@ -63,6 +63,7 @@ module Fluent
     #   In Table ID, enter a name for your new table. Naming rules are the same as for your dataset.
     config_param :table, :string, default: nil
     config_param :tables, :string, default: nil
+    config_param :template_suffix, :string, default: nil
 
     config_param :auto_create_table, :bool, default: false
 
@@ -82,6 +83,7 @@ module Fluent
 
     config_param :schema_path, :string, default: nil
     config_param :fetch_schema, :bool, default: false
+    config_param :schema_cache_expire, :time, default: 600
     config_param :field_string,  :string, default: nil
     config_param :field_integer, :string, default: nil
     config_param :field_float,   :string, default: nil
@@ -171,7 +173,7 @@ module Fluent
         require 'digest/sha1'
         extend(LoadImplementation)
       else
-        raise Fluend::ConfigError "'method' must be 'insert' or 'load'"
+        raise Fluend::ConfigError, "'method' must be 'insert' or 'load'"
       end
 
       case @auth_method
@@ -253,8 +255,10 @@ module Fluent
 
       @tables_queue = @tablelist.dup.shuffle
       @tables_mutex = Mutex.new
+      @fetch_schema_mutex = Mutex.new
 
-      fetch_schema() if @fetch_schema
+      @last_fetch_schema_time = 0
+      fetch_schema(false) if @fetch_schema
     end
 
     def client
@@ -356,32 +360,52 @@ module Fluent
         t
       end
       table_id = generate_table_id(table_id_format, Time.at(Fluent::Engine.now), chunk)
-      _write(chunk, table_id)
+      template_suffix = @template_suffix ? generate_table_id(@template_suffix, Time.at(Fluent::Engine.now), chunk) : nil
+      _write(chunk, table_id, template_suffix)
     end
 
-    def fetch_schema
-      table_id_format = @tablelist[0]
-      table_id = generate_table_id(table_id_format, Time.at(Fluent::Engine.now))
-      res = client.get_table(@project, @dataset, table_id)
+    def fetch_schema(allow_overwrite = true)
+      table_id = nil
+      @fetch_schema_mutex.synchronize do
+        if Fluent::Engine.now - @last_fetch_schema_time > @schema_cache_expire
+          table_id_format = @tablelist[0]
+          table_id = generate_table_id(table_id_format, Time.at(Fluent::Engine.now))
+          res = client.get_table(@project, @dataset, table_id)
 
-      schema = res.schema.fields.as_json
-      log.debug "Load schema from BigQuery: #{@project}:#{@dataset}.#{table_id} #{schema}"
-      @fields.load_schema(schema, false)
+          schema = res.schema.fields.as_json
+          log.debug "Load schema from BigQuery: #{@project}:#{@dataset}.#{table_id} #{schema}"
+          if allow_overwrite
+            fields = RecordSchema.new("record")
+            fields.load_schema(schema, allow_overwrite)
+            @fields = fields
+          else
+            @fields.load_schema(schema, allow_overwrite)
+          end
+          @last_fetch_schema_time = Fluent::Engine.now
+        end
+      end
     rescue Google::Apis::ServerError, Google::Apis::ClientError, Google::Apis::AuthorizationError => e
       # api_error? -> client cache clear
       @cached_client = nil
       message = e.message
       log.error "tables.get API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: message
-      raise "failed to fetch schema from bigquery" # TODO: error class
+      if @fields.empty?
+        raise "failed to fetch schema from bigquery" # TODO: error class
+      else
+        log.warn "Use previous schema"
+        @last_fetch_schema_time = Fluent::Engine.now
+      end
     end
 
     module InsertImplementation
       def format(tag, time, record)
-        buf = ''
+        fetch_schema if @template_suffix
 
         if @replace_record_key
           record = replace_record_key(record)
         end
+
+        buf = String.new
         row = @fields.format(@add_time_field.call(record, time))
         unless row.empty?
           row = {"json" => row}
@@ -391,18 +415,20 @@ module Fluent
         buf
       end
 
-      def _write(chunk, table_id)
+      def _write(chunk, table_id, template_suffix)
         rows = []
         chunk.msgpack_each do |row_object|
           # TODO: row size limit
           rows << row_object.deep_symbolize_keys
         end
 
-        res = client.insert_all_table_data(@project, @dataset, table_id, {
+        body = {
           rows: rows,
           skip_invalid_rows: @skip_invalid_rows,
           ignore_unknown_values: @ignore_unknown_values,
-        }, {})
+        }
+        body.merge!(template_suffix: template_suffix) if template_suffix
+        res = client.insert_all_table_data(@project, @dataset, table_id, body, {})
 
         if res.insert_errors
           reasons = []
@@ -441,11 +467,13 @@ module Fluent
 
     module LoadImplementation
       def format(tag, time, record)
-        buf = ''
+        fetch_schema if @template_suffix
 
         if @replace_record_key
           record = replace_record_key(record)
         end
+
+        buf = String.new
         row = @fields.format(@add_time_field.call(record, time))
         unless row.empty?
           buf << MultiJson.dump(row) + "\n"
@@ -453,7 +481,7 @@ module Fluent
         buf
       end
 
-      def _write(chunk, table_id)
+      def _write(chunk, table_id, template_suffix)
         res = nil
         job_id = nil
 
@@ -461,25 +489,7 @@ module Fluent
           if @prevent_duplicate_load
             job_id = create_job_id(upload_source.path, @dataset, @table, @fields.to_a, @max_bad_records, @ignore_unknown_values)
           end
-          configuration = {
-            configuration: {
-              load: {
-                destination_table: {
-                  project_id: @project,
-                  dataset_id: @dataset,
-                  table_id: table_id,
-                },
-                schema: {
-                  fields: @fields.to_a,
-                },
-                write_disposition: "WRITE_APPEND",
-                source_format: "NEWLINE_DELIMITED_JSON",
-                ignore_unknown_values: @ignore_unknown_values,
-                max_bad_records: @max_bad_records,
-              }
-            }
-          }
-          configuration.merge!({job_reference: {project_id: @project, job_id: job_id}}) if job_id
+          configuration = load_configuration(table_id, template_suffix)
           res = client.insert_job(@project, configuration, {upload_source: upload_source, content_type: "application/octet-stream"})
         end
 
@@ -501,6 +511,42 @@ module Fluent
       end
 
       private
+
+      def load_configuration(table_id, template_suffix)
+        job_id = nil
+        if @prevent_duplicate_load
+          job_id = create_job_id(upload_source.path, @dataset, "#{table_id}#{template_suffix}", @fields.to_a, @max_bad_records, @ignore_unknown_values)
+        end
+
+        configuration = {
+          configuration: {
+            load: {
+              destination_table: {
+                project_id: @project,
+                dataset_id: @dataset,
+                table_id: "#{table_id}#{template_suffix}",
+              },
+              schema: {
+                fields: @fields.to_a,
+              },
+              write_disposition: "WRITE_APPEND",
+              source_format: "NEWLINE_DELIMITED_JSON",
+              ignore_unknown_values: @ignore_unknown_values,
+              max_bad_records: @max_bad_records,
+            }
+          }
+        }
+        configuration.merge!({job_reference: {project_id: @project, job_id: job_id}}) if job_id
+
+        # If target table is already exist, omit schema configuration.
+        # Because schema changing is easier.
+        if template_suffix && client.get_table(@project, @dataset, "#{table_id}#{template_suffix}")
+          configuration[:configuration][:load].delete(:schema)
+        end
+
+        configuration
+      rescue Google::Apis::ServerError, Google::Apis::ClientError, Google::Apis::AuthorizationError
+      end
 
       def wait_load(job_id)
         wait_interval = 10
