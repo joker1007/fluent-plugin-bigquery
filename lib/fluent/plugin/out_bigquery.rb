@@ -663,7 +663,11 @@ module Fluent
           elsif value =~ FLOAT_REGEXP
             value.to_f
           else
-            value
+            begin
+              Time.parse(value).strftime("%Y-%m-%d %H:%M:%S.%6L %:z")
+            rescue
+              value
+            end
           end
         else
           value
