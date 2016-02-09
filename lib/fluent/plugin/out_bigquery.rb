@@ -540,12 +540,14 @@ module Fluent
 
         # If target table is already exist, omit schema configuration.
         # Because schema changing is easier.
-        if template_suffix && client.get_table(@project, @dataset, "#{table_id}#{template_suffix}")
-          configuration[:configuration][:load].delete(:schema)
+        begin
+          if template_suffix && client.get_table(@project, @dataset, "#{table_id}#{template_suffix}")
+            configuration[:configuration][:load].delete(:schema)
+          end
+        rescue Google::Apis::ServerError, Google::Apis::ClientError, Google::Apis::AuthorizationError
         end
 
         configuration
-      rescue Google::Apis::ServerError, Google::Apis::ClientError, Google::Apis::AuthorizationError
       end
 
       def wait_load(job_id)
