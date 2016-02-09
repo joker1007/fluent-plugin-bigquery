@@ -545,6 +545,7 @@ module Fluent
             configuration[:configuration][:load].delete(:schema)
           end
         rescue Google::Apis::ServerError, Google::Apis::ClientError, Google::Apis::AuthorizationError
+          raise "Schema is empty" if @fields.empty?
         end
 
         configuration
