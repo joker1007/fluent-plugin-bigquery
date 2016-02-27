@@ -131,6 +131,14 @@ module Fluent
     #                          If you exceed 100 rows per second for an extended period of time, throttling might occur.
     ### Toooooooooooooo short/small per inserts and row!
 
+    ## Timeout
+    # request_timeout_sec
+    #   Bigquery API response timeout
+    # request_open_timeout_sec
+    #   Bigquery API connection, and request timeout
+    config_param :request_timeout_sec, :time, default: nil
+    config_param :request_open_timeout_sec, :time, default: 60
+
     ### Table types
     # https://developers.google.com/bigquery/docs/tables
     #
@@ -428,7 +436,11 @@ module Fluent
           ignore_unknown_values: @ignore_unknown_values,
         }
         body.merge!(template_suffix: template_suffix) if template_suffix
-        res = client.insert_all_table_data(@project, @dataset, table_id, body, {})
+        res = client.insert_all_table_data(
+          @project, @dataset, table_id, body, {
+            options: {timeout_sec: @request_timeout_sec, open_timeout_sec: @request_open_timeout_sec}
+          }
+        )
 
         if res.insert_errors
           reasons = []
@@ -490,7 +502,18 @@ module Fluent
             job_id = create_job_id(upload_source.path, @dataset, @table, @fields.to_a, @max_bad_records, @ignore_unknown_values)
           end
           configuration = load_configuration(table_id, template_suffix, upload_source)
-          res = client.insert_job(@project, configuration, {upload_source: upload_source, content_type: "application/octet-stream"})
+          res = client.insert_job(
+            @project,
+            configuration,
+            {
+              upload_source: upload_source,
+              content_type: "application/octet-stream",
+              options: {
+                timeout_sec: @request_timeout_sec,
+                open_timeout_sec: @request_open_timeout_sec,
+              }
+            }
+          )
         end
 
         wait_load(res.job_reference.job_id)
