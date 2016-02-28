@@ -155,6 +155,8 @@ section in the Google BigQuery document.
   auto_create_table true
   table yourtable%{time_slice}
   schema_path bq_schema.json
+
+  request_open_timeout_sec 5m
 </match>
 ```
 
@@ -174,6 +176,8 @@ Difference with insert method
       * Max used storage is `buffer_chunk_limit (default 1GB)` x `buffer_queue_limit (default 64) = 64GB`
   * `flush_interval`
     * default is `nil` (it is default of TimeSlicedOutput)
+  * `request_open_timeout_sec`
+    * If you send large chunk to Bigquery, recommend set long time to `request_open_timeout_sec`. Otherwise, Timeout error maybe occurs.
 
 ### Authentication
 
