@@ -160,6 +160,21 @@ section in the Google BigQuery document.
 
 I recommend to use file buffer and long flush interval.
 
+Difference with insert method
+
+  * `buffer_type`
+    * default file (it is default of TimeSlicedOutput)
+  * `buffer_chunk_limit`
+    * default 1GB
+    * the max size is limited to 4GB(compressed) or 5TB (uncompressed) on BigQuery
+  * `buffer_chunk_records_limit`
+    * it is available only when buffer_type is `lightening`
+  * `buffer_queue_limit`
+    * default 64
+      * Max used storage is `buffer_chunk_limit (default 1GB)` x `buffer_queue_limit (default 64) = 64GB`
+  * `flush_interval`
+    * default is `nil` (it is default of TimeSlicedOutput)
+
 ### Authentication
 
 There are two methods supported to fetch access token for the service account.
