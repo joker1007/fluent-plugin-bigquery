@@ -31,7 +31,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
   API_SCOPE = "https://www.googleapis.com/auth/bigquery"
 
   def create_driver(conf = CONFIG)
-    Fluent::Test::OutputTestDriver.new(Fluent::BigQueryOutput).configure(conf)
+    Fluent::Test::TimeSlicedOutputTestDriver.new(Fluent::BigQueryOutput).configure(conf)
   end
 
   def stub_client(driver)
@@ -62,6 +62,57 @@ class BigQueryOutputTest < Test::Unit::TestCase
     assert_raise(Fluent::ConfigError, "'table' or 'tables' must be specified, and both are invalid") {
       create_driver(CONFIG + "tables foo,bar")
     }
+  end
+
+  def test_configure_default
+    driver = create_driver(<<-CONFIG)
+      table foo
+      email foo@bar.example
+      private_key_path /path/to/key
+      project yourproject_id
+      dataset yourdataset_id
+    CONFIG
+
+    assert { driver.instance.instance_variable_get("@buffer_type") == "lightening" }
+    assert { driver.instance.instance_variable_get("@flush_interval") == 0.25 }
+    assert { driver.instance.instance_variable_get("@try_flush_interval") == 0.05 }
+    assert { driver.instance.instance_variable_get("@buffer").class == Fluent::LighteningBuffer }
+    assert { driver.instance.instance_variable_get("@buffer").instance_variable_get("@buffer_queue_limit") == 1024 }
+    assert { driver.instance.instance_variable_get("@buffer").instance_variable_get("@buffer_chunk_limit") == 1 * 1024 ** 2 }
+  end
+
+  def test_configure_for_load
+    driver = create_driver(<<-CONFIG)
+      method load
+      buffer_path bigquery.*.buffer
+      table foo
+      email foo@bar.example
+      private_key_path /path/to/key
+      project yourproject_id
+      dataset yourdataset_id
+    CONFIG
+
+    assert { driver.instance.instance_variable_get("@buffer_type") == "file" }
+    assert { driver.instance.instance_variable_get("@try_flush_interval") == 1 }
+    assert { driver.instance.instance_variable_get("@buffer").class == Fluent::FileBuffer }
+    assert { driver.instance.instance_variable_get("@buffer").instance_variable_get("@buffer_chunk_limit") == 1 * 1024 ** 3 }
+    assert { driver.instance.instance_variable_get("@buffer").instance_variable_get("@buffer_queue_limit") == 64 }
+  end
+
+  def test_configure_for_load_with_parameter
+    driver = create_driver(<<-CONFIG)
+      method load
+      buffer_type memory
+      buffer_chunk_limit 100000
+      table foo
+      email foo@bar.example
+      private_key_path /path/to/key
+      project yourproject_id
+      dataset yourdataset_id
+    CONFIG
+
+    assert { driver.instance.instance_variable_get("@buffer_type") == "memory" }
+    assert { driver.instance.instance_variable_get("@buffer").instance_variable_get("@buffer_chunk_limit") == 100000 }
   end
 
   def test_configure_auth_private_key
@@ -736,6 +787,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
 
     driver = create_driver(<<-CONFIG)
       method load
+      buffer_path bigquery.*.buffer
       table foo
       email foo@bar.example
       private_key_path /path/to/key
@@ -824,6 +876,7 @@ class BigQueryOutputTest < Test::Unit::TestCase
     entry = {a: "b"}, {b: "c"}
     driver = create_driver(<<-CONFIG)
       method load
+      buffer_path bigquery.*.buffer
       table foo
       email foo@bar.example
       private_key_path /path/to/key
