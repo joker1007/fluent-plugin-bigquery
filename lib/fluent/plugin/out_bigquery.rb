@@ -19,6 +19,8 @@ module Fluent
     # https://developers.google.com/bigquery/browser-tool-quickstart
     # https://developers.google.com/bigquery/bigquery-api-quickstart
 
+    RETRYABLE_ERROR_REASON = %w(backendError internalError rateLimitExceeded tableUnavailable).freeze
+
     ### default for insert
     def configure_for_insert(conf)
       raise ConfigError unless conf["method"] != "load"
@@ -463,7 +465,7 @@ module Fluent
             end
           end
 
-          raise "failed to insert into bigquery, retry" if reasons.find { |r| r == "backendError" }
+          raise "failed to insert into bigquery, retry" if reasons.find { |r| RETRYABLE_ERROR_REASON.include?(r) }
           return if reasons.all? { |r| r == "invalid" } && @skip_invalid_rows
           flush_secondary(@secondary) if @secondary
         end
@@ -480,10 +482,9 @@ module Fluent
         reason = e.respond_to?(:reason) ? e.reason : nil
         log.error "tabledata.insertAll API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: e.message, reason: reason
 
-        raise "failed to insert into bigquery, retry" if reason == "backendError" # backendError is retryable. TODO: error class
-
-        # other error handling
-        if @secondary
+        if RETRYABLE_ERROR_REASON.include?(reason) || e.is_a?(Google::Apis::ServerError)
+          raise "failed to insert into bigquery, retry" # TODO: error class
+        elsif @secondary
           flush_secondary(@secondary)
         end
       end
@@ -536,11 +537,11 @@ module Fluent
         reason = e.respond_to?(:reason) ? e.reason : nil
         log.error "job.insert API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: e.message, reason: reason
 
-        raise "failed to insert into bigquery, retry" if reason == "backendError" # backendError is retryable. TODO: error class
         return wait_load(job_id) if e.status_code == 409 && e.message =~ /Job/ # duplicate load job
 
-        # other error handling
-        if @secondary
+        if RETRYABLE_ERROR_REASON.include?(reason) || e.is_a?(Google::Apis::ServerError)
+          raise "failed to insert into bigquery, retry" # TODO: error class
+        elsif @secondary
           flush_secondary(@secondary)
         end
       end
@@ -607,7 +608,7 @@ module Fluent
         error_result = _response.status.error_result
         if error_result
           log.error "job.insert API (result)", project_id: @project, dataset: @dataset, table: table_id, message: error_result.message, reason: error_result.reason
-          if _response.status.error_result.reason == "backendError"
+          if RETRYABLE_ERROR_REASON.include?(error_result.reason)
             raise "failed to load into bigquery"
           elsif @secondary
             flush_secondary(@secondary)
