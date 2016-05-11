@@ -511,10 +511,7 @@ module Fluent
         job_id = nil
 
         create_upload_source(chunk) do |upload_source|
-          if @prevent_duplicate_load
-            job_id = create_job_id(upload_source.path, @dataset, @table, @fields.to_a, @max_bad_records, @ignore_unknown_values)
-          end
-          configuration = load_configuration(table_id, template_suffix, upload_source)
+          configuration, job_id = load_configuration(table_id, template_suffix, upload_source)
           res = client.insert_job(
             @project,
             configuration,
@@ -537,7 +534,7 @@ module Fluent
         reason = e.respond_to?(:reason) ? e.reason : nil
         log.error "job.insert API", project_id: @project, dataset: @dataset, table: table_id, code: e.status_code, message: e.message, reason: reason
 
-        return wait_load(job_id) if e.status_code == 409 && e.message =~ /Job/ # duplicate load job
+        return wait_load(job_id) if job_id && e.status_code == 409 && e.message =~ /Job/ # duplicate load job
 
         if RETRYABLE_ERROR_REASON.include?(reason) || e.is_a?(Google::Apis::ServerError)
           raise "failed to insert into bigquery, retry" # TODO: error class
@@ -584,7 +581,7 @@ module Fluent
           raise "Schema is empty" if @fields.empty?
         end
 
-        configuration
+        return configuration, job_id
       end
 
       def wait_load(job_id)
