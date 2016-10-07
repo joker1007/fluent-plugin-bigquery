@@ -3,6 +3,8 @@
 
 forked from [kaizenplatform/fluent-plugin-bigquery](https://github.com/kaizenplatform/fluent-plugin-bigquery "kaizenplatform/fluent-plugin-bigquery")
 
+**This plugin is End of Life. Almost feature is included in original. I recommend to use original, instead of this.**
+
 -----------
 
 [Fluentd](http://fluentd.org) output plugin to load/insert data into Google BigQuery.
